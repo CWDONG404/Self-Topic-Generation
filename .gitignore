@@ -1,0 +1,36 @@
+.env
+.env.*
+!.env.example
+.learnings/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+backend/.venv/
+backend/test.db
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Local application data
+data/
+storage/
+models/
+*.sqlite3
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,13 @@
+.git
+.gitignore
+.learnings
+.env
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/node_modules
+frontend/dist
+data
+storage
+models
+

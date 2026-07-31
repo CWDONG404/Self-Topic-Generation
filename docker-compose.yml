@@ -1,0 +1,131 @@
+name: studyforge
+
+x-backend-environment: &backend-environment
+  APP_SECRET: ${APP_SECRET:-change-me-before-real-use-please}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://studyforge:studyforge@postgres:5432/studyforge}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+  STORAGE_DIR: ${STORAGE_DIR:-/data}
+  APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Shanghai}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+  MAX_DOCUMENT_PAGES: ${MAX_DOCUMENT_PAGES:-2000}
+  MODEL_REQUEST_TIMEOUT_SECONDS: ${MODEL_REQUEST_TIMEOUT_SECONDS:-300}
+  MODEL_REQUEST_MAX_RETRIES: ${MODEL_REQUEST_MAX_RETRIES:-2}
+  VISUAL_ENRICHMENT_MAX_NEW_ASSETS_PER_JOB: ${VISUAL_ENRICHMENT_MAX_NEW_ASSETS_PER_JOB:-8}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  STRICT_LOCAL_MODE: ${STRICT_LOCAL_MODE:-false}
+  HF_HOME: /models/huggingface
+  DOCLING_ARTIFACTS_PATH: /models/docling
+
+x-backend-build: &backend-build
+  context: ./backend
+  target: runtime
+  args:
+    APT_MIRROR_ROOT: ${APT_MIRROR_ROOT:-}
+    PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-studyforge}
+      POSTGRES_USER: ${POSTGRES_USER:-studyforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-studyforge}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-studyforge} -d ${POSTGRES_DB:-studyforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redis_data:/data
+
+  api:
+    build: *backend-build
+    restart: unless-stopped
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level ${LOG_LEVEL:-info}"]
+    environment: *backend-environment
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - application_data:/data
+      - model_cache:/models
+
+  worker:
+    build: *backend-build
+    restart: unless-stopped
+    command: ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=${LOG_LEVEL:-info}", "--concurrency=1"]
+    environment: *backend-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - application_data:/data
+      - model_cache:/models
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  ollama-gpu:
+    image: ollama/ollama:latest
+    profiles: ["ollama-gpu"]
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  postgres_data:
+  redis_data:
+  application_data:
+  model_cache:
+  ollama_data:
