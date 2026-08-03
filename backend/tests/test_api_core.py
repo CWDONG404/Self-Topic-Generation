@@ -152,6 +152,7 @@ def test_library_upload_model_secret_and_job_events(client: TestClient, testing_
             "target_count": 50,
             "execution_mode": "local",
             "model_assignments": {"generator": serialized["id"]},
+            "exam_preset": "cise_v4_2",
         },
     )
     assert created.status_code == 201
@@ -163,6 +164,18 @@ def test_library_upload_model_secret_and_job_events(client: TestClient, testing_
         "blueprint": serialized["id"],
         "author": serialized["id"],
         "reviewer": serialized["id"],
+    }
+    assert job["request_json"]["topic_distribution"] == {
+        "信息安全保障": 10,
+        "网络安全监管": 8,
+        "信息安全管理": 10,
+        "业务连续性": 8,
+        "安全工程与运营": 10,
+        "安全评估": 8,
+        "信息安全支撑技术": 10,
+        "物理与网络通信安全": 12,
+        "计算环境安全": 12,
+        "软件安全开发": 12,
     }
 
     canceled = client.post(f"/api/v1/jobs/{job['id']}/cancel")
@@ -254,6 +267,57 @@ def test_paper_exam_scoring_and_mistake_retry(client: TestClient, testing_sessio
     assert retried_answer.status_code == 200
     assert retried_answer.json()["is_correct"] is True
     assert retried_answer.json()["correct_option"] == "A"
+
+
+def test_new_practice_session_only_uses_approved_questions(
+    client: TestClient, testing_session
+):
+    library = _create_library(client)
+    with testing_session() as db:
+        paper = Paper(
+            library_id=library["id"],
+            title="包含待修订题目的试卷",
+            status="ready",
+            target_count=2,
+            actual_count=2,
+            random_seed=42,
+        )
+        for position, (status_value, stem) in enumerate(
+            [("approved", "已通过审查的题目"), ("needs_revision", "需要修订的题目")],
+            start=1,
+        ):
+            question = Question(
+                library_id=library["id"],
+                stem=stem,
+                normalized_hash=hashlib.sha256(stem.encode()).hexdigest(),
+                correct_option="A",
+                explanation="测试解析",
+                knowledge_point="测试知识点",
+                difficulty="easy",
+                status=status_value,
+            )
+            for option_position, label in enumerate("ABCD"):
+                question.options.append(
+                    QuestionOption(
+                        label=label,
+                        text=f"选项 {label}",
+                        position=option_position,
+                    )
+                )
+            paper.paper_questions.append(
+                PaperQuestion(question=question, position=position)
+            )
+        db.add(paper)
+        db.commit()
+        paper_id = paper.id
+
+    started = client.post(
+        "/api/v1/practice-sessions", json={"paper_id": paper_id, "mode": "practice"}
+    )
+
+    assert started.status_code == 201
+    assert started.json()["total_count"] == 1
+    assert [item["stem"] for item in started.json()["questions"]] == ["已通过审查的题目"]
 
 
 def test_citation_contract_contains_document_and_normalized_rectangles(

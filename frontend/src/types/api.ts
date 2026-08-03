@@ -72,6 +72,8 @@ export interface GenerationRequest {
   model_roles: Partial<Record<ModelRole, Id>>;
   random_seed?: number;
   allow_outline_as_evidence?: boolean;
+  exam_preset?: 'cise_v4_2';
+  topic_distribution?: Record<string, number>;
 }
 
 export interface JobCounts {

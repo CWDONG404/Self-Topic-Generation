@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.services.deduplication import DuplicatePolicy, QuestionFingerprint, question_stem_hash
+from app.services.exam_presets import topic_aliases
 from app.services.model_gateway import BaseModelGateway, ChatMessage
 from app.services.progress import ProgressHook, ProgressReporter, ProgressStage
 from app.services.quota import QuotaError, allocate_document_quotas
@@ -142,6 +143,7 @@ class GenerationRequest:
     total_questions: int
     document_percentages: Mapping[str, Decimal | int | float | str]
     focus_materials: tuple[str, ...] = ()
+    topic_percentages: Mapping[str, Decimal | int | float | str] = field(default_factory=dict)
     random_seed: int = 0
     execution_mode: str = "cloud"
     max_rounds: int = 3
@@ -177,11 +179,15 @@ class GenerationRequest:
         if not isinstance(percentages, Mapping):
             raise GenerationValidationError("document_percentages 必须是文档 ID 到百分比的映射")
         focus = read("focus_materials", "focus_texts", default=()) or ()
+        topic_percentages = read("topic_distribution", "topic_percentages", default={}) or {}
+        if not isinstance(topic_percentages, Mapping):
+            raise GenerationValidationError("topic_distribution 必须是知识域到百分比的映射")
         total = read("total_questions", "target_count", "question_count", default=0)
         return cls(
             total_questions=int(total),
             document_percentages={str(key): val for key, val in percentages.items()},
             focus_materials=tuple(str(item) for item in focus),
+            topic_percentages={str(key): val for key, val in topic_percentages.items()},
             random_seed=int(read("random_seed", "seed", default=0) or 0),
             execution_mode=str(read("execution_mode", "mode", default="cloud")),
             max_rounds=int(read("max_rounds", default=3)),
@@ -200,6 +206,8 @@ class GenerationRequest:
             raise GenerationValidationError("候选题放大系数必须在 1 到 3 之间")
         try:
             allocate_document_quotas(self.total_questions, self.document_percentages)
+            if self.topic_percentages:
+                allocate_document_quotas(self.total_questions, self.topic_percentages)
         except QuotaError as exc:
             raise GenerationValidationError(str(exc)) from exc
 
@@ -424,6 +432,10 @@ REVIEW_SCHEMA: dict[str, Any] = {
         "selected_option": {"type": "string", "enum": ["A", "B", "C", "D"]},
         "unique_answer": {"type": "boolean"},
         "supported_by_evidence": {"type": "boolean"},
+        "meaningful_assessment": {"type": "boolean"},
+        "distractors_valid": {"type": "boolean"},
+        "absence_as_false": {"type": "boolean"},
+        "quality_score": {"type": "integer", "minimum": 1, "maximum": 5},
         "evidence_ids": {"type": "array", "items": {"type": "string"}},
         "issues": {"type": "array", "items": {"type": "string"}},
     },
@@ -431,6 +443,10 @@ REVIEW_SCHEMA: dict[str, Any] = {
         "selected_option",
         "unique_answer",
         "supported_by_evidence",
+        "meaningful_assessment",
+        "distractors_valid",
+        "absence_as_false",
+        "quality_score",
         "evidence_ids",
         "issues",
     ],
@@ -451,34 +467,43 @@ class BlueprintAgent:
         *,
         target_count: int,
         seed: int,
+        topic_percentages: Mapping[str, Decimal | int | float | str] | None = None,
     ) -> BlueprintPlan:
+        required_distribution = dict(topic_percentages or {})
         system = (
             "你是考点蓝图 Agent。重点资料决定考什么，正文证据决定事实。"
             "把重点映射到给定 evidence_id；无法映射的内容放入 coverage_gaps。"
             "不得发明 evidence_id，权重应为非负数。只返回 JSON。"
         )
+        if required_distribution:
+            system += (
+                "required_topic_distribution 是确定性考试配额。topics 必须逐项使用其中的标准名称，"
+                "并为每个知识域映射证据；不得合并、改名或遗漏知识域。"
+            )
         grouped: dict[str, list[Evidence]] = {}
         for item in evidence:
             grouped.setdefault(item.document_id, []).append(item)
         balanced_evidence: list[Evidence] = []
-        offsets = {document_id: 0 for document_id in grouped}
-        while len(balanced_evidence) < 40:
-            added = False
-            for document_id, values in grouped.items():
-                offset = offsets[document_id]
-                if offset >= len(values):
-                    continue
-                balanced_evidence.append(values[offset])
-                offsets[document_id] += 1
-                added = True
-                if len(balanced_evidence) >= 40:
-                    break
-            if not added:
-                break
+        per_document = max(1, 40 // max(1, len(grouped)))
+        # 单份长文档也必须首尾均匀取样，否则蓝图只会看到开头章节。
+        for values in grouped.values():
+            if len(values) <= per_document:
+                balanced_evidence.extend(values)
+                continue
+            if per_document == 1:
+                balanced_evidence.append(values[len(values) // 2])
+                continue
+            positions = {
+                round(index * (len(values) - 1) / (per_document - 1))
+                for index in range(per_document)
+            }
+            balanced_evidence.extend(values[index] for index in sorted(positions))
+        balanced_evidence = balanced_evidence[:40]
         payload = {
             "target_count": target_count,
             "focus_materials": [text[:8000] for text in focus_materials],
             "authoritative_evidence": [item.prompt_view(1200) for item in balanced_evidence],
+            "required_topic_distribution": required_distribution,
         }
         response = await self.gateway.complete_json(
             [
@@ -511,13 +536,71 @@ class BlueprintAgent:
                     str(raw.get("rationale") or ""),
                 )
             )
-        if not topics:
+        coverage_gaps = [str(item) for item in (data.get("coverage_gaps") or ())]
+        if required_distribution:
+            inferred = self._infer_required_topic_evidence(required_distribution, evidence)
+            by_name = {topic.name: topic for topic in topics}
+            required_topics: list[BlueprintTopic] = []
+            for name, percentage in required_distribution.items():
+                model_topic = by_name.get(name)
+                evidence_ids = tuple(
+                    dict.fromkeys(
+                        (
+                            *(model_topic.evidence_ids if model_topic else ()),
+                            *inferred.get(name, ()),
+                        )
+                    )
+                )
+                if not evidence_ids:
+                    coverage_gaps.append(f"知识域“{name}”未映射到正文证据")
+                required_topics.append(
+                    BlueprintTopic(
+                        name=name,
+                        weight=max(0.0, float(percentage)),
+                        keywords=(model_topic.keywords if model_topic else topic_aliases(name)),
+                        evidence_ids=evidence_ids,
+                        rationale=(
+                            model_topic.rationale if model_topic else "来自考试预设的确定性配额"
+                        ),
+                    )
+                )
+            topics = required_topics
+        elif not topics:
             topics = self._fallback_topics(evidence)
         return BlueprintPlan(
             tuple(topics),
-            tuple(str(item) for item in (data.get("coverage_gaps") or ())),
+            tuple(dict.fromkeys(coverage_gaps)),
             tuple(str(item) for item in (data.get("conflicts") or ())),
         )
+
+    @staticmethod
+    def _infer_required_topic_evidence(
+        distribution: Mapping[str, Decimal | int | float | str],
+        evidence: Sequence[Evidence],
+    ) -> dict[str, tuple[str, ...]]:
+        """依据章节标题把连续证据归入标准知识域，兼容串讲材料中的简写。"""
+
+        assigned: dict[str, list[str]] = {name: [] for name in distribution}
+        current_by_document: dict[str, str] = {}
+        ordered = sorted(
+            evidence,
+            key=lambda item: (item.document_id, int(item.metadata.get("ordinal", 0))),
+        )
+        for item in ordered:
+            section_parts = tuple(part.strip() for part in item.section_path if part.strip())
+            first_line = item.text.strip().splitlines()[0].strip() if item.text.strip() else ""
+            matched: str | None = None
+            for name in distribution:
+                aliases = topic_aliases(name)
+                if any(alias in section_parts for alias in aliases) or first_line in aliases:
+                    matched = name
+                    break
+            if matched:
+                current_by_document[item.document_id] = matched
+            current = current_by_document.get(item.document_id)
+            if current:
+                assigned[current].append(item.evidence_id)
+        return {name: tuple(dict.fromkeys(ids)) for name, ids in assigned.items()}
 
     @staticmethod
     def _fallback_topics(evidence: Sequence[Evidence]) -> list[BlueprintTopic]:
@@ -547,16 +630,28 @@ class QuestionAuthorAgent:
         variation_nonce: str,
         feedback: Sequence[str] = (),
         batch_progress: AuthorBatchHook | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[QuestionCandidate]:
         system = (
             "你是四选一单选题出题 Agent。每题必须独立可读、只有一个正确答案，"
             "解析说明正确项为何正确及主要干扰项为何错误。只可引用输入中的 evidence_id，"
             "不得生成页码、坐标或不存在的出处。不要使用“根据以上材料”等依赖上下文的措辞。"
+            "禁止把‘资料中是否列出、提到或出现’作为答案判定逻辑；资料没有提到某概念，"
+            "不代表该概念错误。每个干扰项必须能由证据或稳定、无争议的专业知识说明为何错误，"
+            "不能只是随意拼凑几个材料外名词。优先设计情境应用、流程顺序、方案比较、风险判断、"
+            "因果分析或计算题；可以用稳定的领域常识扩展情境，但决定正确答案的关键前提必须能"
+            "回溯到给定证据。纯名单识别题仅在名单本身具有明确规范意义且无法合理情境化时使用。"
             "相同考点应改变设问角度。只返回 JSON。"
         )
         generated: list[QuestionCandidate] = []
         starts = list(range(0, count, AUTHOR_BATCH_SIZE))
         for batch_index, start in enumerate(starts):
+            if cancel_check is not None:
+                cancelled = cancel_check()
+                if inspect.isawaitable(cancelled):
+                    cancelled = await cancelled
+                if cancelled:
+                    break
             batch_count = min(AUTHOR_BATCH_SIZE, count - start)
             batch_nonce = f"{variation_nonce}-batch-{batch_index}"
             payload = {
@@ -637,6 +732,21 @@ class QuestionReviewerAgent:
         seed: int,
     ) -> ReviewOutcome:
         # 刻意不传出题 Agent 的答案与解析，先独立作答，再由 Supervisor 比对。
+        known = {item.evidence_id for item in evidence}
+        deterministic_issues = validate_question(question, known)
+        if deterministic_issues:
+            return ReviewOutcome(
+                False,
+                "",
+                deterministic_issues,
+                (),
+                {
+                    "meaningful_assessment": False,
+                    "distractors_valid": False,
+                    "absence_as_false": True,
+                    "quality_score": 1,
+                },
+            )
         prompt = {
             "stem": question.stem,
             "options": {label: text for label, text in zip("ABCD", question.options, strict=True)},
@@ -646,8 +756,18 @@ class QuestionReviewerAgent:
             [
                 ChatMessage(
                     "system",
-                    "你是独立审题 Agent。仅依据正文证据作答，检查是否唯一答案、题意是否清晰、"
-                    "答案是否有直接证据。不得参考出题者答案，不得发明 evidence_id。只返回 JSON。",
+                    "你是独立审题 Agent。先脱离出题者结论独立作答，再严格评估题目质量。"
+                    "检查唯一答案、题意、直接证据、干扰项和考查价值。以下情况必须判失败："
+                    "(1) 只问哪些名称在资料中列出/提到/出现，属于机械名单识别；"
+                    "(2) 把资料没有提到某概念当作该选项错误，证据沉默不等于事实为假；"
+                    "(3) 干扰项只是任意拼凑、明显荒谬或无法逐项说明错误；"
+                    "(4) 只复述一句原文，不考查理解、应用、比较、顺序、因果、风险判断或计算。"
+                    "允许使用稳定且无争议的专业常识来理解情境，但正确答案的关键前提仍须有"
+                    "给定 evidence_id 支撑。meaningful_assessment 仅在题目具有实际训练价值时"
+                    "为 true；"
+                    "distractors_valid 仅在每个错误项都因事实或逻辑错误而错误时为 true；"
+                    "absence_as_false 表示题目是否利用‘材料未出现’来判错；quality_score 1-5，"
+                    "低于 3 不得通过。不得参考出题者答案，不得发明 evidence_id。只返回 JSON。",
                 ),
                 ChatMessage("user", json.dumps(prompt, ensure_ascii=False)),
             ],
@@ -659,7 +779,10 @@ class QuestionReviewerAgent:
         selected = str(data.get("selected_option") or "").upper()
         unique = data.get("unique_answer") is True
         supported = data.get("supported_by_evidence") is True
-        known = {item.evidence_id for item in evidence}
+        meaningful = data.get("meaningful_assessment") is True
+        distractors_valid = data.get("distractors_valid") is True
+        absence_as_false = data.get("absence_as_false") is True
+        quality_score = int(data.get("quality_score") or 0)
         evidence_ids = tuple(
             str(item) for item in (data.get("evidence_ids") or ()) if str(item) in known
         )
@@ -672,7 +795,24 @@ class QuestionReviewerAgent:
             issues.append("审题 Agent 未确认答案唯一")
         if not supported or not evidence_ids:
             issues.append("审题 Agent 未确认正文证据支持")
-        passed = selected == question.correct_option and unique and supported and bool(evidence_ids)
+        if not meaningful:
+            issues.append("题目考查价值不足，偏向机械记忆或原文名单识别")
+        if not distractors_valid:
+            issues.append("干扰项缺乏独立事实依据或区分度")
+        if absence_as_false:
+            issues.append("错误选项依赖‘资料未提及即为错误’的无效逻辑")
+        if quality_score < 3:
+            issues.append(f"题目质量评分过低（{quality_score}/5）")
+        passed = (
+            selected == question.correct_option
+            and unique
+            and supported
+            and bool(evidence_ids)
+            and meaningful
+            and distractors_valid
+            and not absence_as_false
+            and quality_score >= 3
+        )
         return ReviewOutcome(
             passed, selected, tuple(dict.fromkeys(issues)), evidence_ids, dict(data)
         )
@@ -680,6 +820,11 @@ class QuestionReviewerAgent:
 
 _CONTEXT_DEPENDENT = re.compile(
     r"根据(?:上述|以上|所给|这份)(?:材料|文档|内容|上下文)|(?:in|from)\s+the\s+(?:above\s+)?(?:document|context)",
+    re.IGNORECASE,
+)
+
+_MATERIAL_META_STEM = re.compile(
+    r"(?:资料|材料|讲义|文档)(?:中|里|所)?(?:列出|列举|提到|提及|出现|包含|包括|未列出|未提到|未出现)",
     re.IGNORECASE,
 )
 
@@ -694,6 +839,8 @@ def validate_question(
         issues.append("题干过短")
     if _CONTEXT_DEPENDENT.search(question.stem):
         issues.append("题干依赖外部上下文")
+    if _MATERIAL_META_STEM.search(question.stem):
+        issues.append("题目以资料是否提及作为判定依据，考查价值不足")
     if len(question.options) != 4 or any(not item.strip() for item in question.options):
         issues.append("必须有四个非空选项")
     normalized_options = {re.sub(r"\s+", "", item).casefold() for item in question.options}
@@ -858,6 +1005,7 @@ class GenerationSupervisor:
                 flat_evidence,
                 target_count=spec.total_questions,
                 seed=spec.random_seed,
+                topic_percentages=spec.topic_percentages,
             )
             await reporter.emit(
                 ProgressStage.BLUEPRINT,
@@ -932,6 +1080,12 @@ class GenerationSupervisor:
 
             allowed_ids = {item.evidence_id for item in document_evidence}
             topics = self._topics_for_document(blueprint, allowed_ids)
+            topic_quotas = (
+                allocate_document_quotas(quota, spec.topic_percentages)
+                if spec.topic_percentages
+                else {}
+            )
+            topics_by_name = {topic.name: topic for topic in topics}
             for round_index in range(spec.max_rounds):
                 current_document_count = sum(
                     1 for question in accepted if question.document_id == document_id
@@ -944,15 +1098,6 @@ class GenerationSupervisor:
                         reporter, quotas, spec, accepted, blueprint, statistics, deficits, warnings
                     )
                 relaxed = round_index == spec.max_rounds - 1
-                candidate_count = max(missing, math.ceil(missing * spec.oversample_factor))
-                sampled_evidence = self._sample_evidence(
-                    document_evidence,
-                    randomizer,
-                    max_items=16,
-                    preferred_ids={
-                        evidence_id for topic in topics for evidence_id in topic.evidence_ids
-                    },
-                )
                 nonce = (
                     f"{spec.random_seed}-{document_id}-{round_index}-"
                     f"{randomizer.getrandbits(64):016x}"
@@ -999,15 +1144,141 @@ class GenerationSupervisor:
                         },
                     )
 
-                candidates = await self.author_agent.generate(
-                    document_id=document_id,
-                    count=candidate_count,
-                    evidence=sampled_evidence,
-                    topics=topics,
-                    seed=randomizer.randrange(0, 2**31),
-                    variation_nonce=nonce,
-                    batch_progress=report_author_batch,
-                )
+                candidate_evidence: dict[str, Sequence[Evidence]] = {}
+                if topic_quotas:
+                    candidates = []
+                    topic_quota_items = list(topic_quotas.items())
+                    topic_quota_completed = 0
+                    for topic_name, topic_quota in topic_quota_items:
+                        accepted_for_topic = sum(
+                            1
+                            for question in accepted
+                            if question.document_id == document_id
+                            and question.generation_metadata.get("exam_domain") == topic_name
+                        )
+                        topic_missing = topic_quota - accepted_for_topic
+                        if topic_missing <= 0:
+                            continue
+                        topic = topics_by_name.get(topic_name) or BlueprintTopic(
+                            topic_name,
+                            float(spec.topic_percentages[topic_name]),
+                        )
+                        topic_evidence = self._sample_evidence(
+                            document_evidence,
+                            randomizer,
+                            max_items=24,
+                            preferred_ids=set(topic.evidence_ids),
+                        )
+                        topic_candidate_count = max(
+                            topic_missing,
+                            math.ceil(topic_missing * spec.oversample_factor),
+                        )
+                        # 候选题会先按知识域全部生成、再统一审查；这里预留生成/审题
+                        # 区间的 15% 展示知识域与批次进度，避免长文档任务在 25% 假性卡住。
+                        generation_fraction = (
+                            len(accepted) + (topic_quota_completed * 0.15)
+                        ) / spec.total_questions
+                        await reporter.emit(
+                            ProgressStage.GENERATING,
+                            fraction=generation_fraction,
+                            message=f"正在生成知识域“{topic_name}”候选题",
+                            accepted=len(accepted),
+                            target=spec.total_questions,
+                            current_document=document_id,
+                            payload={
+                                "exam_domain": topic_name,
+                                "domain_target": topic_quota,
+                                "domain_accepted": accepted_for_topic,
+                                "round": round_index + 1,
+                            },
+                        )
+
+                        async def report_topic_batch(
+                            completed: int,
+                            total: int,
+                            *,
+                            accepted_before: int = len(accepted),
+                            completed_quota: int = topic_quota_completed,
+                            current_topic_quota: int = topic_quota,
+                            current_topic_name: str = topic_name,
+                            current_document_id: str = document_id,
+                            generation_round: int = round_index,
+                        ) -> None:
+                            topic_equivalent = completed_quota + (
+                                current_topic_quota * completed / max(1, total)
+                            )
+                            await reporter.emit(
+                                ProgressStage.GENERATING,
+                                fraction=(
+                                    accepted_before + (topic_equivalent * 0.15)
+                                )
+                                / spec.total_questions,
+                                message=(
+                                    f"知识域“{current_topic_name}”候选题生成中"
+                                    f"（批次 {completed}/{total}）"
+                                ),
+                                accepted=accepted_before,
+                                target=spec.total_questions,
+                                generated=statistics["generated"],
+                                rejected=statistics["rejected"],
+                                revised=statistics["revised"],
+                                current_document=current_document_id,
+                                current_topic=current_topic_name,
+                                payload={
+                                    "exam_domain": current_topic_name,
+                                    "domain_target": current_topic_quota,
+                                    "batch": completed,
+                                    "batch_total": total,
+                                    "round": generation_round + 1,
+                                },
+                            )
+
+                        generated_for_topic = await self.author_agent.generate(
+                            document_id=document_id,
+                            count=topic_candidate_count,
+                            evidence=topic_evidence,
+                            topics=(topic,),
+                            seed=randomizer.randrange(0, 2**31),
+                            variation_nonce=f"{nonce}-{topic_name}",
+                            batch_progress=report_topic_batch,
+                            cancel_check=cancel_check,
+                        )
+                        for candidate in generated_for_topic:
+                            tagged = replace(
+                                candidate,
+                                generation_metadata={
+                                    **candidate.generation_metadata,
+                                    "exam_domain": topic_name,
+                                },
+                            )
+                            candidates.append(tagged)
+                            candidate_evidence[tagged.question_id] = topic_evidence
+                        topic_quota_completed += topic_quota
+                else:
+                    candidate_count = max(
+                        missing, math.ceil(missing * spec.oversample_factor)
+                    )
+                    sampled_evidence = self._sample_evidence(
+                        document_evidence,
+                        randomizer,
+                        max_items=16,
+                        preferred_ids={
+                            evidence_id for topic in topics for evidence_id in topic.evidence_ids
+                        },
+                    )
+                    candidates = await self.author_agent.generate(
+                        document_id=document_id,
+                        count=candidate_count,
+                        evidence=sampled_evidence,
+                        topics=topics,
+                        seed=randomizer.randrange(0, 2**31),
+                        variation_nonce=nonce,
+                        batch_progress=report_author_batch,
+                        cancel_check=cancel_check,
+                    )
+                    candidate_evidence = {
+                        candidate.question_id: sampled_evidence for candidate in candidates
+                    }
                 statistics["generated"] += len(candidates)
 
                 for candidate_index, original in enumerate(candidates):
@@ -1016,6 +1287,14 @@ class GenerationSupervisor:
                     )
                     if current_document_count >= quota:
                         break
+                    exam_domain = str(original.generation_metadata.get("exam_domain") or "")
+                    if exam_domain and sum(
+                        1
+                        for question in accepted
+                        if question.document_id == document_id
+                        and question.generation_metadata.get("exam_domain") == exam_domain
+                    ) >= topic_quotas.get(exam_domain, 0):
+                        continue
                     if await self._is_cancelled(cancel_check):
                         return await self._cancelled_result(
                             reporter,
@@ -1114,7 +1393,9 @@ class GenerationSupervisor:
                             break
                         revised = await self.author_agent.revise(
                             current,
-                            evidence=sampled_evidence,
+                            evidence=candidate_evidence.get(
+                                original.question_id, document_evidence
+                            ),
                             feedback=last_issues,
                             seed=randomizer.randrange(0, 2**31),
                             revision=revision + 1,
@@ -1122,7 +1403,14 @@ class GenerationSupervisor:
                         statistics["revised"] += 1
                         if revised is None:
                             break
-                        current = replace(revised, document_id=document_id)
+                        current = replace(
+                            revised,
+                            document_id=document_id,
+                            generation_metadata={
+                                **revised.generation_metadata,
+                                **({"exam_domain": exam_domain} if exam_domain else {}),
+                            },
+                        )
                     if not passed:
                         statistics["rejected"] += 1
                         await reporter.emit(

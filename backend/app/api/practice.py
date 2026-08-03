@@ -142,7 +142,7 @@ def create_practice_session(
         db.scalars(
             select(PaperQuestion.question_id)
             .join(Question, Question.id == PaperQuestion.question_id)
-            .where(PaperQuestion.paper_id == paper.id, Question.status != "disabled")
+            .where(PaperQuestion.paper_id == paper.id, Question.status == "approved")
             .order_by(PaperQuestion.position)
         ).all()
     )

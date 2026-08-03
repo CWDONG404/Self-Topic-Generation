@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.services.exam_presets import EXAM_PRESET_DISTRIBUTIONS
+
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -183,6 +185,8 @@ class JobCreate(BaseModel):
     execution_mode: Literal["local", "cloud", "mixed"] = "local"
     random_seed: int | None = None
     allow_outline_as_evidence: bool = False
+    exam_preset: Literal["cise_v4_2"] | None = None
+    topic_distribution: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_allocations(self) -> JobCreate:
@@ -193,6 +197,15 @@ class JobCreate(BaseModel):
             raise ValueError("正文资料出题比例之和必须为 100%")
         if len(self.outline_document_ids) != len(set(self.outline_document_ids)):
             raise ValueError("重点资料不能重复")
+        if self.exam_preset:
+            self.topic_distribution = dict(EXAM_PRESET_DISTRIBUTIONS[self.exam_preset])
+        if self.topic_distribution:
+            if any(not name.strip() for name in self.topic_distribution):
+                raise ValueError("知识域名称不能为空")
+            if any(value <= 0 or value > 100 for value in self.topic_distribution.values()):
+                raise ValueError("知识域比例必须是 1 到 100 的整数")
+            if sum(self.topic_distribution.values()) != 100:
+                raise ValueError("知识域出题比例之和必须为 100%")
         return self
 
 

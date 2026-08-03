@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
+  ChevronDown,
   CircleHelp,
   Cloud,
   Copy,
@@ -230,7 +231,25 @@ export function SettingsPage() {
         description="为不同 Agent 分配云端或本地模型。密钥只允许覆盖，读取接口永不返回明文。"
       />
 
-      <Card className="mb-6 overflow-hidden border-pine-100 bg-gradient-to-br from-white to-pine-50/60">
+      <details className="group mb-6 overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-card">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4 transition hover:bg-stone-50 sm:px-5">
+          <span className="flex min-w-0 items-center gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-pine-50 text-pine-700">
+              <CircleHelp aria-hidden="true" className="h-4 w-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-bold text-ink">配置帮助与本地模型方案</span>
+              <span className="mt-0.5 block text-xs text-stone-500">第一次配置、Ollama 下载命令和 Kimi 说明</span>
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-2 text-xs font-semibold text-pine-700">
+            展开查看
+            <ChevronDown aria-hidden="true" className="h-4 w-4 transition group-open:rotate-180" />
+          </span>
+        </summary>
+
+        <div className="border-t border-stone-100 bg-stone-50/50 p-4 sm:p-5">
+      <Card className="mb-4 overflow-hidden border-pine-100 bg-gradient-to-br from-white to-pine-50/60">
         <CardBody>
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-pine-100 text-pine-700">
@@ -257,7 +276,7 @@ export function SettingsPage() {
         </CardBody>
       </Card>
 
-      <Card className="mb-6 overflow-hidden border-pine-200">
+      <Card className="mb-4 overflow-hidden border-pine-200">
         <CardHeader className="flex flex-col gap-2 border-b border-pine-100 bg-pine-50/70 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -375,13 +394,15 @@ export function SettingsPage() {
         </CardBody>
       </Card>
 
-      <div className="mb-6 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
+      <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
         <p className="font-bold">关于 Kimi K3</p>
         <p className="mt-1 text-xs leading-5 text-sky-700">
           K3 支持图片输入，因此可以同时承担蓝图、出题、审题和视觉角色；它不是 Embedding 模型。此前的 ReadTimeout
           表示长任务在客户端等待窗口内没有返回，不是 API Key 格式错误。系统现在为正式出题使用更长的请求窗口，并保留自动重试。
         </p>
       </div>
+        </div>
+      </details>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <section aria-labelledby="profiles-title">
@@ -484,48 +505,50 @@ export function SettingsPage() {
             </Card>
           )}
 
-          <div className="mt-4 rounded-2xl border border-pine-100 bg-pine-50 p-4">
-            <div className="flex items-start gap-3">
-              <ShieldCheck aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-pine-700" />
-              <div>
+          <details className="group mt-4 overflow-hidden rounded-2xl border border-stone-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4 transition hover:bg-stone-50">
+              <span className="flex min-w-0 items-center gap-3">
+                <ShieldCheck aria-hidden="true" className="h-5 w-5 shrink-0 text-pine-700" />
+                <span>
+                  <span className="block text-sm font-bold text-ink">安全与角色说明</span>
+                  <span className="mt-0.5 block text-xs text-stone-500">API Key、本地模式及各 Agent 的模型能力要求</span>
+                </span>
+              </span>
+              <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-stone-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="space-y-4 border-t border-stone-100 bg-stone-50/50 p-4">
+              <div className="rounded-xl border border-pine-100 bg-pine-50 p-4">
                 <p className="text-sm font-bold text-pine-900">密钥与本地模式安全边界</p>
                 <p className="mt-1 text-xs leading-5 text-pine-700">
                   API Key 使用密码框录入，保存后前端会立即清空，后续接口只返回“已配置”状态而非明文。选择“仅本地”生成时，系统不会自动回退到云端。
                 </p>
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-white p-4 text-sm">
+                  <p className="font-bold text-ink">能力是硬条件</p>
+                  <p className="mt-1 text-xs leading-5 text-stone-500">
+                    蓝图、出题、审题需要结构化输出；视觉与 Embedding 只在对应角色中出现。请按服务端真实能力勾选。
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white p-4 text-sm">
+                  <p className="font-bold text-ink">默认角色是自动选择</p>
+                  <p className="mt-1 text-xs leading-5 text-stone-500">
+                    打开生成页时会优先选中这些模型，不会改变模型能力，也可在每次任务中手动覆盖。
+                  </p>
+                </div>
+                <div className="grid gap-2 sm:col-span-2">
+                  {roles.map((role) => (
+                    <div key={role.key} className="flex items-start justify-between gap-4 rounded-lg border border-stone-100 bg-white px-3 py-2.5">
+                      <span className="text-xs font-semibold text-ink">
+                        {role.label}{role.required ? <span className="ml-1 text-red-500">*</span> : null}
+                      </span>
+                      <span className="text-right text-xs leading-5 text-stone-500">{role.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-
-          <Card className="mt-4">
-            <CardHeader className="flex items-center gap-2">
-              <CircleHelp aria-hidden="true" className="h-4 w-4 text-pine-600" />
-              <h2 className="font-bold text-ink">能力与默认角色怎么选</h2>
-            </CardHeader>
-            <CardBody className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-xl bg-stone-50 p-4 text-sm">
-                <p className="font-bold text-ink">能力是硬条件</p>
-                <p className="mt-1 text-xs leading-5 text-stone-500">
-                  蓝图、出题、审题需要结构化输出；视觉与 Embedding 只在对应角色中出现。请按服务端真实能力勾选。
-                </p>
-              </div>
-              <div className="rounded-xl bg-stone-50 p-4 text-sm">
-                <p className="font-bold text-ink">默认角色是自动选择</p>
-                <p className="mt-1 text-xs leading-5 text-stone-500">
-                  打开生成页时会优先选中这些模型，不会改变模型能力，也可在每次任务中手动覆盖。
-                </p>
-              </div>
-              <div className="sm:col-span-2 grid gap-2">
-                {roles.map((role) => (
-                  <div key={role.key} className="flex items-start justify-between gap-4 rounded-lg border border-stone-100 px-3 py-2.5">
-                    <span className="text-xs font-semibold text-ink">
-                      {role.label}{role.required ? <span className="ml-1 text-red-500">*</span> : null}
-                    </span>
-                    <span className="text-right text-xs leading-5 text-stone-500">{role.description}</span>
-                  </div>
-                ))}
-              </div>
-            </CardBody>
-          </Card>
+          </details>
         </section>
 
         <Card className="xl:sticky xl:top-8">

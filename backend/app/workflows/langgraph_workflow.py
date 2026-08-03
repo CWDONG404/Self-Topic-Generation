@@ -45,6 +45,9 @@ def _request_dict(request: GenerationRequest | Mapping[str, Any] | Any) -> dict[
             str(document_id): str(value) for document_id, value in spec.document_percentages.items()
         },
         "focus_materials": list(spec.focus_materials),
+        "topic_distribution": {
+            str(topic): str(value) for topic, value in spec.topic_percentages.items()
+        },
         "random_seed": spec.random_seed,
         "execution_mode": spec.execution_mode,
         "max_rounds": spec.max_rounds,
@@ -161,6 +164,7 @@ def build_generation_graph(
             flat_evidence,
             target_count=request.total_questions,
             seed=request.random_seed,
+            topic_percentages=request.topic_percentages,
         )
         await reporter.emit(
             ProgressStage.BLUEPRINT,

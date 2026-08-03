@@ -9,6 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DBSession, get_model_profile
+from app.core.config import settings
 from app.core.security import decrypt_secret, encrypt_secret, redact_text, secret_hint
 from app.models import Embedding, ModelProfile
 from app.schemas import (
@@ -212,8 +213,8 @@ async def test_model_profile(profile_id: str, db: DBSession) -> ModelTestResult:
                 "model_name": profile.model_name,
                 "api_key": secret,
                 "capabilities": enabled_capabilities,
-                "timeout_seconds": 20,
-                "max_retries": 0,
+                "timeout_seconds": settings.model_request_timeout_seconds,
+                "max_retries": settings.model_request_max_retries,
             }
         )
         detected = {name: False for name in (profile.capabilities or {})}

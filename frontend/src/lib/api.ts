@@ -600,6 +600,8 @@ export const api = {
       model_assignments: payload.model_roles,
       random_seed: payload.random_seed,
       allow_outline_as_evidence: payload.allow_outline_as_evidence ?? false,
+      exam_preset: payload.exam_preset,
+      topic_distribution: payload.topic_distribution ?? {},
     };
     return normalizeJob(await apiRequest<BackendJob>('/jobs', {
       method: 'POST', body: JSON.stringify(backendPayload),

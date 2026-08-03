@@ -1559,7 +1559,19 @@ def regenerate_question(self: Any, question_id: str) -> Mapping[str, Any]:
 
         async def run_agents() -> tuple[Any, Any]:
             candidate = context["candidate"]
-            feedback = ("用户请求换一个设问角度重新生成，不能仅做同义改写",)
+            previous_review_issues = tuple(
+                issue
+                for review in reversed(context["question"].reviews)
+                if review.status == "failed"
+                for issue in review.issues
+            )[:6]
+            feedback = (
+                "用户请求换一个设问角度重新生成，不能仅做同义改写",
+                "优先改成有实际判断价值的情境、分类、比较或决策题",
+                "禁止询问资料列出、提到或出现了什么，也不能把资料未提及当作错误依据",
+                "若证据只列出术语，只能考证据直接支持的概念分类或应用，不能凭空补写恢复速度、机制等关键前提",
+                *previous_review_issues,
+            )
             last_error = "出题模型没有返回可用的新题"
             for revision in range(1, 4):
                 revised = await QuestionAuthorAgent(author_gateway).revise(

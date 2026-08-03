@@ -123,9 +123,41 @@ export function PracticePage() {
               <h2 className="text-sm font-bold text-ink">答题卡</h2>
               <div className="mt-4 grid grid-cols-5 gap-2 sm:grid-cols-10 xl:grid-cols-5">
                 {questions.map((item, index) => (
-                  <button key={item.id} onClick={() => setCurrentIndex(index)} aria-label={`跳到第 ${index + 1} 题`} aria-current={index === currentIndex ? 'step' : undefined} className={cn('grid aspect-square place-items-center rounded-lg text-xs font-bold transition', index === currentIndex ? 'bg-ink text-white ring-2 ring-ink ring-offset-2' : answers[item.id] ? 'bg-pine-100 text-pine-700' : 'bg-stone-100 text-stone-400 hover:bg-stone-200')}>{index + 1}</button>
+                  <button
+                    key={item.id}
+                    onClick={() => setCurrentIndex(index)}
+                    aria-label={`跳到第 ${index + 1} 题`}
+                    aria-current={index === currentIndex ? 'step' : undefined}
+                    data-answer-state={
+                      !answers[item.id]
+                        ? 'unanswered'
+                        : practiceMode
+                          ? answers[item.id] === item.correct_answer ? 'correct' : 'incorrect'
+                          : 'answered'
+                    }
+                    className={cn(
+                      'grid aspect-square place-items-center rounded-lg text-xs font-bold transition',
+                      !answers[item.id]
+                        ? index === currentIndex ? 'bg-ink text-white' : 'bg-stone-100 text-stone-400 hover:bg-stone-200'
+                        : practiceMode
+                          ? answers[item.id] === item.correct_answer
+                            ? 'bg-pine-100 text-pine-700'
+                            : 'bg-red-100 text-red-700'
+                          : 'bg-pine-100 text-pine-700',
+                      index === currentIndex && 'ring-2 ring-ink ring-offset-2',
+                    )}
+                  >
+                    {index + 1}
+                  </button>
                 ))}
               </div>
+              {practiceMode ? (
+                <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-stone-500" aria-label="答题卡颜色说明">
+                  <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-pine-400" />答对</span>
+                  <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-red-400" />答错</span>
+                  <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-stone-300" />未答</span>
+                </div>
+              ) : null}
               <div className="mt-4 flex items-center justify-between text-xs text-stone-400"><span>已答 {answeredCount}</span><span>未答 {questions.length - answeredCount}</span></div>
             </CardBody>
           </Card>

@@ -63,6 +63,21 @@ const modelRoleMeta: Array<{ key: ModelRole; label: string; icon: typeof BrainCi
   { key: 'embedding', label: '向量检索', icon: BookOpenCheck },
 ];
 
+const CISE_V42_DISTRIBUTION = [
+  ['信息安全保障', 10],
+  ['网络安全监管', 8],
+  ['信息安全管理', 10],
+  ['业务连续性', 8],
+  ['安全工程与运营', 10],
+  ['安全评估', 8],
+  ['信息安全支撑技术', 10],
+  ['物理与网络通信安全', 12],
+  ['计算环境安全', 12],
+  ['软件安全开发', 12],
+] as const;
+
+const ciseTopicDistribution = Object.fromEntries(CISE_V42_DISTRIBUTION) as Record<string, number>;
+
 function redistribute(ids: string[]) {
   if (!ids.length) return {};
   const base = Math.floor(100 / ids.length);
@@ -89,6 +104,7 @@ export function GeneratePage() {
   const [executionMode, setExecutionMode] = useState<GenerationRequest['execution_mode']>('cloud_allowed');
   const [modelRoles, setModelRoles] = useState<Partial<Record<ModelRole, string>>>({});
   const [randomSeed, setRandomSeed] = useState('');
+  const [examPreset, setExamPreset] = useState<'cise_v4_2' | ''>('');
 
   useEffect(() => {
     setOutlineIds([]);
@@ -182,6 +198,10 @@ export function GeneratePage() {
         allow_outline_as_evidence: selectedSourceIds.some(
           (documentId) => readyDocuments.find((item) => item.id === documentId)?.role === 'outline',
         ),
+        ...(examPreset ? {
+          exam_preset: examPreset,
+          topic_distribution: ciseTopicDistribution,
+        } : {}),
         ...(randomSeed ? { random_seed: Number(randomSeed) } : {}),
       };
       return api.createGenerationJob(payload);
@@ -361,6 +381,46 @@ export function GeneratePage() {
             <CardHeader className="flex items-center gap-3">
               <span className="grid h-8 w-8 place-items-center rounded-full bg-pine-700 text-sm font-bold text-white">4</span>
               <div>
+                <h2 className="font-bold text-ink">选择考试蓝图</h2>
+                <p className="mt-0.5 text-xs text-stone-400">预设控制同一份资料内部的知识域题量</p>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setExamPreset('')}
+                  className={cn('rounded-xl border p-4 text-left transition', !examPreset ? 'border-pine-500 bg-pine-50' : 'border-stone-200')}
+                >
+                  <span className="block text-sm font-bold text-ink">根据资料自动规划</span>
+                  <span className="mt-1 block text-xs leading-5 text-stone-400">由蓝图 Agent 根据重点材料分配知识点</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setExamPreset('cise_v4_2'); setQuestionCount(100); }}
+                  className={cn('rounded-xl border p-4 text-left transition', examPreset === 'cise_v4_2' ? 'border-pine-500 bg-pine-50' : 'border-stone-200')}
+                >
+                  <span className="flex items-center gap-2 text-sm font-bold text-ink">CISE V4.2 标准卷 <Badge tone="success">推荐</Badge></span>
+                  <span className="mt-1 block text-xs leading-5 text-stone-400">100 道单选题，每题 1 分，严格按官方十个知识域比例</span>
+                </button>
+              </div>
+              {examPreset === 'cise_v4_2' ? (
+                <div className="grid gap-2 rounded-xl border border-pine-100 bg-pine-50/60 p-3 sm:grid-cols-2">
+                  {CISE_V42_DISTRIBUTION.map(([name, percentage]) => (
+                    <div key={name} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="truncate text-stone-600">{name}</span>
+                      <span className="shrink-0 font-bold text-pine-700">{percentage}% · {Math.round(questionCount * percentage / 100)} 题</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex items-center gap-3">
+              <span className="grid h-8 w-8 place-items-center rounded-full bg-pine-700 text-sm font-bold text-white">5</span>
+              <div>
                 <h2 className="font-bold text-ink">题量与模型</h2>
                 <p className="mt-0.5 text-xs text-stone-400">按角色指定模型；本地模式不会回退到云端</p>
               </div>
@@ -489,6 +549,7 @@ export function GeneratePage() {
               <dl className="space-y-2 text-sm">
                 <div className="flex justify-between gap-3"><dt className="text-stone-400">重点资料</dt><dd className="font-semibold text-ink">{outlineIds.length} 份</dd></div>
                 <div className="flex justify-between gap-3"><dt className="text-stone-400">比例总和</dt><dd className={cn('font-semibold', totalPercentage === 100 ? 'text-pine-600' : 'text-amber-600')}>{totalPercentage}%</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-stone-400">考试蓝图</dt><dd className="font-semibold text-ink">{examPreset === 'cise_v4_2' ? 'CISE V4.2' : '自动规划'}</dd></div>
                 <div className="flex justify-between gap-3"><dt className="text-stone-400">运行位置</dt><dd className="font-semibold text-ink">{executionMode === 'local_only' ? '仅本地' : '云端可用'}</dd></div>
               </dl>
               <div className="rounded-xl border border-pine-100 bg-pine-50 p-3 text-xs leading-5 text-pine-700">

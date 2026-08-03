@@ -251,6 +251,7 @@ def create_job(payload: JobCreate, db: DBSession) -> GenerationJob:
         request_json=request_json,
         target_count=payload.target_count,
         random_seed=seed,
+        prompt_version="v2-quality",
     )
     db.add(job)
     db.commit()
