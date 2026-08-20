@@ -4,13 +4,17 @@ import {
   BookOpenCheck,
   BrainCircuit,
   Check,
+  ChevronDown,
   Cloud,
   Cpu,
   FileText,
   Info,
+  Layers3,
   RefreshCw,
+  Settings2,
   ShieldCheck,
   Sparkles,
+  UploadCloud,
   WandSparkles,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -220,9 +224,70 @@ export function GeneratePage() {
     setAllocations(redistribute(nextIds));
   };
 
-  if (libraries.isLoading || models.isLoading) return <PageLoader label="正在准备出题向导…" />;
-  const pageError = libraries.error || models.error;
-  if (pageError) return <ErrorState message={toErrorMessage(pageError)} onRetry={() => { void libraries.refetch(); void models.refetch(); }} />;
+  if (libraries.isLoading || models.isLoading || (activeLibraryId && documents.isLoading)) return <PageLoader label="正在准备出题向导…" />;
+  const pageError = libraries.error || models.error || documents.error;
+  if (pageError) return <ErrorState message={toErrorMessage(pageError)} onRetry={() => { void libraries.refetch(); void models.refetch(); void documents.refetch(); }} />;
+
+  const preparationModelReady = modelRoleMeta
+    .filter((item) => item.required)
+    .every((item) => eligibleModelsByRole[item.key].length > 0);
+  const preparationLibraryReady = Boolean(libraries.data?.length);
+  const preparationSourcesReady = sources.length > 0;
+
+  if (!preparationModelReady || !preparationLibraryReady || !preparationSourcesReady) {
+    const nextStep = !preparationModelReady
+      ? { to: '/settings', label: '配置可用模型', description: '连接一条支持结构化输出的 Kimi、Ollama 或兼容模型。' }
+      : !preparationLibraryReady
+        ? { to: '/knowledge', label: '创建资料库', description: '先建立一个用于存放同类学习资料的知识空间。' }
+        : { to: '/knowledge', label: '上传权威正文', description: parsingDocuments.length ? '文档仍在解析，完成后即可进入出题向导。' : '至少上传一份正文，并等待解析完成。' };
+
+    return (
+      <div className="animate-fade-in">
+        <PageHeader
+          eyebrow="生成向导"
+          title="开始前还差一步"
+          description="系统会按顺序检查模型、资料库和正文。准备完成后才展开出题参数。"
+        />
+        <Card className="mx-auto max-w-3xl overflow-hidden">
+          <CardHeader className="border-b border-stone-100 bg-stone-50/70">
+            <h2 className="font-bold text-ink">出题准备</h2>
+            <p className="mt-1 text-xs text-stone-500">只需完成当前未就绪的项目。</p>
+          </CardHeader>
+          <CardBody>
+            <ol className="space-y-2">
+              {[
+                { label: '连接模型', description: '蓝图、出题和审题需要结构化输出', ready: preparationModelReady, icon: Settings2 },
+                { label: '创建资料库', description: '组织同一考试或主题下的资料', ready: preparationLibraryReady, icon: Layers3 },
+                { label: '上传就绪正文', description: '答案与解析必须有可追溯证据', ready: preparationSourcesReady, icon: UploadCloud },
+              ].map(({ label, description, ready, icon: Icon }, index) => (
+                <li key={label} className={cn('flex items-center gap-4 rounded-xl border p-4', ready ? 'border-pine-100 bg-pine-50/70' : 'border-stone-200 bg-white')}>
+                  <span className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-bold', ready ? 'bg-pine-600 text-white' : 'bg-stone-100 text-stone-500')}>
+                    {ready ? <Check aria-hidden="true" className="h-4 w-4" /> : index + 1}
+                  </span>
+                  <Icon aria-hidden="true" className={cn('h-5 w-5 shrink-0', ready ? 'text-pine-700' : 'text-stone-400')} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-bold text-ink">{label}</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-stone-500">{description}</span>
+                  </span>
+                  <Badge tone={ready ? 'success' : 'warning'}>{ready ? '已完成' : '待完成'}</Badge>
+                </li>
+              ))}
+            </ol>
+            <div className="mt-6 rounded-xl border border-pine-100 bg-pine-50 p-4 sm:flex sm:items-center sm:justify-between sm:gap-4">
+              <div>
+                <p className="text-sm font-bold text-pine-900">{nextStep.label}</p>
+                <p className="mt-1 text-xs leading-5 text-pine-700">{nextStep.description}</p>
+              </div>
+              <Link to={nextStep.to} className={cn(buttonVariants({ size: 'sm' }), 'mt-3 shrink-0 sm:mt-0')}>
+                继续准备
+                <ArrowRight aria-hidden="true" className="h-4 w-4" />
+              </Link>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-in">
@@ -260,7 +325,6 @@ export function GeneratePage() {
                 </div>
               )}
               {documents.isLoading ? <div className="mt-4 text-sm text-stone-400">读取资料中…</div> : null}
-              {documents.error ? <p className="mt-3 text-sm text-red-600">{toErrorMessage(documents.error)}</p> : null}
               {parsingDocuments.length ? (
                 <div className="mt-3 flex flex-col gap-2 rounded-xl border border-sky-100 bg-sky-50 p-3 text-xs leading-5 text-sky-700 sm:flex-row sm:items-center sm:justify-between">
                   <span>
@@ -421,8 +485,8 @@ export function GeneratePage() {
             <CardHeader className="flex items-center gap-3">
               <span className="grid h-8 w-8 place-items-center rounded-full bg-pine-700 text-sm font-bold text-white">5</span>
               <div>
-                <h2 className="font-bold text-ink">题量与模型</h2>
-                <p className="mt-0.5 text-xs text-stone-400">按角色指定模型；本地模式不会回退到云端</p>
+                <h2 className="font-bold text-ink">设置题量</h2>
+                <p className="mt-0.5 text-xs text-stone-400">模型会按默认 Agent 分工自动选择</p>
               </div>
             </CardHeader>
             <CardBody className="space-y-6">
@@ -451,6 +515,16 @@ export function GeneratePage() {
                   />
                 </div>
               </div>
+
+              <details className="group overflow-hidden rounded-xl border border-stone-200 bg-stone-50/50">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-stone-600 hover:bg-stone-50">
+                  高级设置
+                  <span className="flex items-center gap-2 text-xs font-normal text-stone-400">
+                    运行位置、模型分工、随机种子
+                    <ChevronDown aria-hidden="true" className="h-4 w-4 transition group-open:rotate-180" />
+                  </span>
+                </summary>
+                <div className="space-y-6 border-t border-stone-200 bg-white p-4">
 
               <fieldset>
                 <legend className="field-label">执行模式</legend>
@@ -532,6 +606,8 @@ export function GeneratePage() {
                 </div>
                 <p className="field-help">保存种子便于复现检索与随机采样；历史题干仍会参与永久去重。</p>
               </div>
+                </div>
+              </details>
             </CardBody>
           </Card>
         </form>

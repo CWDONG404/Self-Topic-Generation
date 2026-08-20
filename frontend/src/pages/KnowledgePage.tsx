@@ -323,6 +323,52 @@ export function KnowledgePage() {
   if (libraries.isLoading) return <PageLoader />;
   if (libraries.error) return <ErrorState message={toErrorMessage(libraries.error)} onRetry={() => void libraries.refetch()} />;
 
+  if (!libraries.data?.length) {
+    return (
+      <div className="animate-fade-in">
+        <PageHeader
+          eyebrow="知识来源"
+          title="创建第一个资料库"
+          description="一个资料库对应一个考试或学习主题，之后可以在里面上传正文与重点资料。"
+        />
+        <Card className="mx-auto max-w-2xl overflow-hidden">
+          <CardBody className="p-6 sm:p-8">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-pine-50 text-pine-700">
+              <BookMarked aria-hidden="true" className="h-6 w-6" />
+            </span>
+            <h2 className="mt-5 text-xl font-bold text-ink">给这批资料起个名字</h2>
+            <p className="mt-2 text-sm leading-6 text-stone-500">例如“CISP 备考”或“计算机网络”。创建后会直接进入上传页面。</p>
+            <form
+              className="mt-6 flex flex-col gap-3 sm:flex-row"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (libraryName.trim()) createLibrary.mutate();
+              }}
+            >
+              <label htmlFor="first-library" className="sr-only">资料库名称</label>
+              <input
+                id="first-library"
+                autoFocus
+                value={libraryName}
+                onChange={(event) => setLibraryName(event.target.value)}
+                placeholder="例如：CISP 备考"
+                className="field-control min-w-0 flex-1"
+              />
+              <Button type="submit" loading={createLibrary.isPending} disabled={!libraryName.trim()}>
+                <FolderPlus aria-hidden="true" className="h-4 w-4" />
+                创建并继续
+              </Button>
+            </form>
+            <div className="mt-6 flex items-start gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4">
+              <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-stone-500" />
+              <p className="text-xs leading-5 text-stone-500">支持 PDF、DOCX、Markdown 和 TXT，单文件默认不超过 200 MB。</p>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="animate-fade-in">
       <PageHeader

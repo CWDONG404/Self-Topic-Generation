@@ -8,7 +8,9 @@ import {
   FilePlus2,
   Layers3,
   Play,
+  Settings2,
   Sparkles,
+  UploadCloud,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -47,6 +49,7 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const libraries = useQuery({ queryKey: ['libraries'], queryFn: api.listLibraries });
   const documents = useQuery({ queryKey: ['documents'], queryFn: () => api.listDocuments() });
+  const models = useQuery({ queryKey: ['model-profiles'], queryFn: api.listModelProfiles });
   const jobs = useQuery({ queryKey: ['jobs'], queryFn: api.listJobs, refetchInterval: 10_000 });
   const papers = useQuery({ queryKey: ['papers'], queryFn: api.listPapers });
   const practice = useMutation({
@@ -55,11 +58,12 @@ export function DashboardPage() {
     onError: (error) => toast.error(toErrorMessage(error)),
   });
 
-  const isLoading = libraries.isLoading || documents.isLoading || jobs.isLoading || papers.isLoading;
-  const error = libraries.error || documents.error || jobs.error || papers.error;
+  const isLoading = libraries.isLoading || documents.isLoading || models.isLoading || jobs.isLoading || papers.isLoading;
+  const error = libraries.error || documents.error || models.error || jobs.error || papers.error;
   const retry = () => {
     void libraries.refetch();
     void documents.refetch();
+    void models.refetch();
     void jobs.refetch();
     void papers.refetch();
   };
@@ -72,6 +76,21 @@ export function DashboardPage() {
   const runningJobs = jobs.data?.filter((item) => ['queued', 'running'].includes(item.status)).length ?? 0;
   const recentPapers = [...(papers.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
   const recentJobs = [...(jobs.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
+  const modelReady = models.data?.some((profile) => profile.is_available !== false && profile.capabilities.structured_output) ?? false;
+  const libraryReady = Boolean(libraries.data?.length);
+  const documentReady = documents.data?.some(
+    (document) => ['ready', 'warning'].includes(document.status)
+      && (document.role === 'source' || document.allow_as_evidence),
+  ) ?? false;
+  const onboardingComplete = modelReady && libraryReady && documentReady;
+  const nextAction = !modelReady
+    ? { to: '/settings', label: '配置第一个模型', description: '选择 Kimi 或 Ollama，保存并测试连接。', icon: Settings2 }
+    : !libraryReady
+      ? { to: '/knowledge', label: '创建资料库', description: '为这一类学习资料建立一个知识空间。', icon: Layers3 }
+      : !documentReady
+        ? { to: '/knowledge', label: '上传并解析资料', description: '添加至少一份可作答案依据的正文。', icon: UploadCloud }
+        : { to: '/generate', label: '创建模拟卷', description: '资料和模型都已就绪，可以开始出题。', icon: FilePlus2 };
+  const NextIcon = nextAction.icon;
 
   return (
     <div className="animate-fade-in">
@@ -92,9 +111,9 @@ export function DashboardPage() {
             重点资料告诉 AI 考什么，权威正文保证每个答案有出处。生成、审查、练习都在一个地方完成。
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
-            <Link to="/generate" className={cn(buttonVariants({ size: 'lg' }), 'bg-white text-pine-900 hover:bg-pine-50')}>
-              <FilePlus2 aria-hidden="true" className="h-4 w-4" />
-              新建模拟卷
+            <Link to={nextAction.to} className={cn(buttonVariants({ size: 'lg' }), 'bg-white text-pine-900 hover:bg-pine-50')}>
+              <NextIcon aria-hidden="true" className="h-4 w-4" />
+              {nextAction.label}
             </Link>
             <Link
               to="/knowledge"
@@ -108,6 +127,37 @@ export function DashboardPage() {
         <div aria-hidden="true" className="absolute -bottom-24 -right-16 h-80 w-80 rounded-full border-[48px] border-pine-500/20" />
         <div aria-hidden="true" className="absolute right-20 top-10 h-16 w-16 rotate-12 rounded-2xl border border-white/10 bg-white/5" />
       </section>
+
+      {!onboardingComplete ? (
+        <section aria-labelledby="getting-started-title" className="mt-5 rounded-2xl border border-pine-100 bg-white p-4 shadow-card sm:p-5">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-pine-600">下一步</p>
+              <h2 id="getting-started-title" className="mt-1 text-lg font-bold text-ink">{nextAction.label}</h2>
+              <p className="mt-1 text-sm text-stone-500">{nextAction.description}</p>
+            </div>
+            <Link to={nextAction.to} className={buttonVariants({ size: 'sm' })}>
+              继续设置
+              <ArrowRight aria-hidden="true" className="h-4 w-4" />
+            </Link>
+          </div>
+          <ol className="mt-5 grid gap-2 sm:grid-cols-3">
+            {[
+              { label: '连接模型', ready: modelReady, icon: Settings2 },
+              { label: '创建资料库', ready: libraryReady, icon: Layers3 },
+              { label: '上传就绪正文', ready: documentReady, icon: BookOpenText },
+            ].map(({ label, ready, icon: Icon }, index) => (
+              <li key={label} className={cn('flex items-center gap-3 rounded-xl border px-3 py-3 text-sm', ready ? 'border-pine-100 bg-pine-50 text-pine-800' : 'border-stone-200 text-stone-500')}>
+                <span className={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', ready ? 'bg-pine-600 text-white' : 'bg-stone-100 text-stone-500')}>
+                  {ready ? <CheckCircle2 aria-hidden="true" className="h-4 w-4" /> : index + 1}
+                </span>
+                <Icon aria-hidden="true" className="h-4 w-4" />
+                <span className="font-semibold">{label}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
 
       <section aria-label="概览数据" className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
